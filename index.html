@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>로드스터 축제</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#101827;color:#fff;font-family:system-ui,sans-serif;overflow:hidden}
+#ui{position:absolute;inset:0;pointer-events:none} .panel{pointer-events:auto;background:#101827eF;border:1px solid #40516a;border-radius:16px;padding:18px;box-shadow:0 12px 40px #0008}
+#lobby{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(92vw,440px)}
+h1{margin:0 0 6px;font-size:30px}p{color:#bdc9d8;margin:6px 0 16px}
+input,button{font:inherit;border-radius:10px;padding:12px;border:0}input{width:100%;margin:5px 0;background:#eaf0f7;color:#111}
+button{cursor:pointer;background:#ffca3a;color:#172033;font-weight:800;margin:4px 2px}
+button.secondary{background:#31445e;color:#fff}#room{font-size:22px;letter-spacing:4px;color:#ffca3a;font-weight:900}
+#players{padding:8px 0;line-height:1.8;max-height:130px;overflow:auto}
+#hud{position:absolute;top:12px;left:12px;right:12px;display:none;justify-content:space-between;align-items:flex-start}
+.tag{background:#101827dd;border:1px solid #52647b;padding:9px 12px;border-radius:12px}
+#mobile{position:absolute;bottom:18px;left:0;right:0;display:none;justify-content:space-between;padding:0 20px;pointer-events:auto}
+.pad{display:grid;grid-template-columns:55px 55px 55px;gap:6px}.pad button{height:52px;background:#ffffffd9;color:#182334;font-size:22px;margin:0;touch-action:none}
+#notice{position:absolute;top:76px;left:50%;transform:translateX(-50%);background:#111d;padding:8px 14px;border-radius:20px;white-space:nowrap}
+canvas{display:block}
+@media(max-width:700px){#mobile{display:flex}h1{font-size:25px}}
+</style>
+</head>
+<body>
+<div id="lobby" class="panel">
+<h1>🏁 로드스터 축제</h1><p>자동차를 몰고 장애물 코스를 돌파하라!</p>
+<input id="name" maxlength="12" placeholder="닉네임" value="레이서">
+<button id="create">새 방 만들기</button>
+<div style="height:1px;background:#40516a;margin:14px 0"></div>
+<input id="codeInput" maxlength="6" placeholder="방 코드 6자리">
+<button class="secondary" id="join">방 참가</button>
+<div id="roomInfo" hidden><p>방 코드: <span id="roomCode" class="room"></span></p><div id="players"></div><button id="start">레이스 시작</button></div>
+<div id="error" style="color:#ff8b8b;margin-top:8px"></div>
+</div>
+<div id="hud"><div class="tag">🏁 로드스터 축제 <span id="progress">0m</span></div><div class="tag">WASD / 방향키로 운전</div></div>
+<div id="notice"></div>
+<div id="mobile">
+ <div class="pad"><span></span><button data-k="ArrowUp">↑</button><span></span><button data-k="ArrowLeft">←</button><button data-k="ArrowDown">↓</button><button data-k="ArrowRight">→</button></div>
+ <div class="pad"><button data-k=" ">점프</button></div>
+</div>
+<script src="/socket.io/socket.io.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.min.js"></script>
+<script>
+const socket=io();let myId=null,roomCode=null,players={},started=false,keys={},raceStart=false;
+const lobby=document.querySelector("#lobby"), err=document.querySelector("#error");
+const name=()=>document.querySelector("#name").value.trim()||"레이서";
+function enter(kind){
+ err.textContent="";
+ socket.emit(kind,{name:name(),code:document.querySelector("#codeInput").value},res=>{
+  if(!res?.ok){err.textContent=res?.error||"접속에 실패했습니다.";return}
+  myId=res.id;roomCode=res.code;document.querySelector("#roomCode").textContent=roomCode;
+  document.querySelector("#roomInfo").hidden=false;
+ });
+}
+document.querySelector("#create").onclick=()=>enter("createRoom");
+document.querySelector("#join").onclick=()=>enter("joinRoom");
+document.querySelector("#start").onclick=()=>socket.emit("startRace");
+socket.on("roomState",list=>{
+ players={};list.forEach(p=>players[p.id]=p);
+ document.querySelector("#players").innerHTML=list.map(p=>(p.id===myId?"▶ ":"")+p.name+(p.finished?" ✔":"")).join("<br>");
+});
+socket.on("raceStarted",()=>{started=true;lobby.style.display="none";document.querySelector("#hud").style.display="flex";say("출발! 장애물을 피해 결승선까지 달려!");});
+socket.on("playerMoved",p=>{if(players[p.id])Object.assign(players[p.id],p)});
+socket.on("playerFinished",p=>say(p.name+" 결승선 통과!"));
+socket.on("raceEnded",()=>say("레이스 종료! 로비로 돌아가 새 경주를 시작할 수 있어요."));
+function say(t){document.querySelector("#notice").textContent=t;setTimeout(()=>{document.querySelector("#notice").textContent=""},3500)}
+addEventListener("keydown",e=>{keys[e.key]=true;if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(e.key))e.preventDefault()});
+addEventListener("keyup",e=>keys[e.key]=false);
+document.querySelectorAll("[data-k]").forEach(b=>{
+ const k=b.dataset.k;b.addEventListener("pointerdown",e=>{e.preventDefault();keys[k]=true});
+ ["pointerup","pointerleave","pointercancel"].forEach(ev=>b.addEventListener(ev,()=>keys[k]=false));
+});
+// Three.js scene
+const scene=new THREE.Scene();scene.background=new THREE.Color(0x9bd5ed);scene.fog=new THREE.Fog(0x9bd5ed,55,190);
+const camera=new THREE.PerspectiveCamera(65,innerWidth/innerHeight,.1,400);
+const renderer=new THREE.WebGLRenderer({antialias:true});renderer.setSize(innerWidth,innerHeight);renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.shadowMap.enabled=true;document.body.appendChild(renderer.domElement);
+scene.add(new THREE.HemisphereLight(0xffffff,0x52604b,2));
+const sun=new THREE.DirectionalLight(0xffffff,2.3);sun.position.set(-20,35,15);sun.castShadow=true;scene.add(sun);
+const mat=(c)=>new THREE.MeshStandardMaterial({color:c,roughness:.8});
+const grass=mat(0x57934c),road=mat(0x343b45),white=mat(0xffffff),orange=mat(0xff8c28),tire=mat(0x17191d),steel=mat(0x78899b);
+let floor=new THREE.Mesh(new THREE.PlaneGeometry(220,260),grass);floor.rotation.x=-Math.PI/2;floor.position.set(0,-.3,70);floor.receiveShadow=true;scene.add(floor);
+function box(x,y,z,sx,sy,sz,m){let o=new THREE.Mesh(new THREE.BoxGeometry(sx,sy,sz),m);o.position.set(x,y,z);o.castShadow=true;o.receiveShadow=true;scene.add(o);return o}
+box(0,-.05,70,18,.25,165,road);
+for(let z=-8;z<155;z+=8){box(-8.7,.05,z,.25,.1,3,white);box(8.7,.05,z,.25,.1,3,white)}
+// barriers
+for(let z=4;z<150;z+=12){box(-9,.6,z,.5,1,5,orange);box(9,.6,z,.5,1,5,orange)}
+// obstacles: tires, ramps, gates, narrow sections
+function cylinder(x,y,z,r,h,m){let o=new THREE.Mesh(new THREE.CylinderGeometry(r,r,h,18),m);o.position.set(x,y,z);o.rotation.z=Math.PI/2;o.castShadow=true;scene.add(o)}
+for(let z of [16,42,69,96,122]){for(let x of [-4,0,4])cylinder(x,.85,z,1.05,1.3,tire)}
+// ramps
+function ramp(x,z,w=5){let o=box(x,.55,z,w,1.1,5,orange);o.rotation.x=-.18}
+ramp(-3,29);ramp(3,56);ramp(0,110,7);
+// slalom pylons
+for(let z of [35,38,82,86,90,132,136])for(let x of [-5,5]){let c=new THREE.Mesh(new THREE.ConeGeometry(.7,1.8,16),orange);c.position.set(x,.9,z);scene.add(c)}
+// narrow bridge
+box(0,.2,76,5,.5,10,steel);box(-3,.8,76,.25,1.2,10,orange);box(3,.8,76,.25,1.2,10,orange);
+// finish arch
+box(-6,3,148,.6,6,.7,orange);box(6,3,148,.6,6,.7,orange);box(0,6,148,12,.7,.7,orange);
+for(let i=0;i<12;i++)box(-5.5+i,5.7,148,.9,.3,.15,i%2?white:tire);
+function car(color){
+ const g=new THREE.Group(),body=new THREE.Mesh(new THREE.BoxGeometry(1.7,.65,2.8),mat(color));body.position.y=.85;body.castShadow=true;g.add(body);
+ const cabin=new THREE.Mesh(new THREE.BoxGeometry(1.25,.65,1.25),mat(0x27384b));cabin.position.set(0,1.42,-.15);g.add(cabin);
+ for(let x of [-.95,.95])for(let z of [-.85,.85]){let w=new THREE.Mesh(new THREE.CylinderGeometry(.38,.38,.25,16),tire);w.rotation.z=Math.PI/2;w.position.set(x,.48,z);g.add(w)}
+ scene.add(g);return g;
+}
+const myCar=car(0xff595e),remote={};let px=0,pz=0,rot=0,speed=0,lastSend=0;
+function updateRemote(){
+ for(let id in players){if(id===myId)continue;let p=players[id];if(!remote[id])remote[id]=car(p.color);remote[id].position.set(p.x,0,p.z);remote[id].rotation.y=p.rot}
+ for(let id in remote)if(!players[id]){scene.remove(remote[id]);delete remote[id]}
+}
+function loop(t){
+ requestAnimationFrame(loop);
+ if(started){
+  let forward=keys.ArrowUp||keys.w||keys.W,back=keys.ArrowDown||keys.s||keys.S,left=keys.ArrowLeft||keys.a||keys.A,right=keys.ArrowRight||keys.d||keys.D;
+  if(forward)speed=Math.min(speed+.012,.28);else if(back)speed=Math.max(speed-.018,-.12);else speed*=.96;
+  if(left)rot+=.035;if(right)rot-=.035;
+  px+=Math.sin(rot)*speed*2;pz+=Math.cos(rot)*speed*2;
+  px=Math.max(-7,Math.min(7,px));pz=Math.max(0,Math.min(150,pz));
+  // simple collision bumpers
+  const obstacleZ=[16,42,69,96,122];for(let z of obstacleZ){if(Math.abs(pz-z)<1.7&&[-4,0,4].some(x=>Math.abs(px-x)<1.2)){speed*=.65}}
+  myCar.position.set(px,0,pz);myCar.rotation.y=rot;
+  camera.position.lerp(new THREE.Vector3(px,6,pz-10),.12);camera.lookAt(px,1,pz+5);
+  document.querySelector("#progress").textContent=Math.floor(pz)+"m";
+  if(t-lastSend>70){socket.emit("move",{x:px,z:pz,rot});lastSend=t}
+ }else{camera.position.set(0,12,-18);camera.lookAt(0,0,30)}
+ updateRemote();renderer.render(scene,camera);
+}
+camera.position.set(0,12,-18);camera.lookAt(0,0,30);loop(0);
+addEventListener("resize",()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});
+</script>
+</body></html>
